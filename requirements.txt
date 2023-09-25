@@ -6,5 +6,5 @@ jaxlib>=0.4.6
 numpy
 optax
 dm-haiku
-einshape @ git+git://github.com/deepmind/einshape.git
+einshape @ git+https://github.com/deepmind/einshape.git
 ml_collections
