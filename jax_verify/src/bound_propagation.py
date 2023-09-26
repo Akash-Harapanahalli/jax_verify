@@ -119,6 +119,11 @@ class IntervalBound(Bound, graph_traversal.InputBound):
   def project_onto_bound(self, tensor: Tensor) -> Tensor:
     return jnp.clip(tensor, a_min=self._lower_bound, a_max=self._upper_bound)
 
+  def __str__(self) -> str:
+    return f"([{self.lower}, {self.upper}])"
+  
+  def __repr__(self) -> str:
+    return f"([{self.lower}, {self.upper}])"
 
 def unwrapping(fn):
   """Create a wrapper function to unwrap the bound arguments.

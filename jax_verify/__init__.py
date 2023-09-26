@@ -15,6 +15,7 @@
 
 """Library to perform verification on Neural Networks."""
 
+from jax_verify.src.bound_propagation import JittableInputBound
 from jax_verify.src.bound_propagation import IntervalBound
 from jax_verify.src.ibp import bound_transform as ibp_transform
 from jax_verify.src.ibp import interval_bound_propagation

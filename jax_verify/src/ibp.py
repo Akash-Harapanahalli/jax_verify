@@ -298,7 +298,7 @@ def _ibp_dotgeneral_bilinear(lhs: bound_propagation.Bound,
 
 def _ibp_div(
     lhs: bound_propagation.LayerInput,
-    rhs: Tensor,
+    rhs: bound_propagation.LayerInput,
 ) -> bound_propagation.LayerInput:
   """Propagation of IBP bounds through Elementwise division.
 
@@ -310,9 +310,10 @@ def _ibp_div(
   Returns:
     out_bounds: Bound on the output of the division.
   """
-  if isinstance(rhs, bound_propagation.Bound):
-    raise ValueError('Bound propagation through the denominator unsupported.')
-  return _ibp_bilinear(lax.mul_p, lhs, 1. / rhs)
+  # if isinstance(rhs, bound_propagation.Bound):
+  #   raise ValueError('Bound propagation through the denominator unsupported.')
+  # return _ibp_bilinear(lax.mul_p, lhs, 1. / rhs)
+  return _ibp_bilinear(lax.mul_p, lhs, _ibp_reciprocal(rhs))
 
 
 def _ibp_add(
@@ -478,7 +479,8 @@ def _ibp_integer_pow(x: bound_propagation.LayerInput, y: int) -> IntervalBound:
     out_bounds: integer_pow output or its bounds.
   """
   if y < 0:
-    raise NotImplementedError
+    # raise NotImplementedError
+    _ibp_integer_pow(_ibp_reciprocal(x), -y)
   l_pow = lax.integer_pow(x.lower, y)
   u_pow = lax.integer_pow(x.upper, y)
 
@@ -531,15 +533,56 @@ def _ibp_linear(*args, **kwargs) -> IntervalBound:
 
 
 def _ibp_reciprocal(x: bound_propagation.LayerInput) -> IntervalBound:
-  """Propagation of IBP bounds through reciprocal, assuming positive input.
+  """Propagation of IBP bounds through reciprocal
 
   Args:
     x: Argument to get the inverse of.
   Returns:
     out_bounds: Reciprocal of the bounds.
   """
-  return IntervalBound(1. / jax.nn.relu(x.upper), 1. / jax.nn.relu(x.lower))
+  def _reciprocal_if (l:jnp.float32, u:jnp.float32) :
+    case0 = lambda : (1. / u, 1. / l)
+    case1 = lambda : (-jnp.inf, jnp.inf)
+    c = jnp.logical_or(jnp.logical_and(l > 0, u > 0),
+                       jnp.logical_and(l < 0, u < 0))
+    return lax.cond(c, case0, case1)
+  _reciprocal_if_vmap = jax.vmap(_reciprocal_if,(0,0))
+  _x, x_ = _reciprocal_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
+  return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
 
+"""
+Additions for nonlinear systems analysis
+"""
+def _ibp_sin(x: bound_propagation.LayerInput) -> IntervalBound :
+  def _sin_if (l:jnp.float32, u:jnp.float32) :
+    def case_lpi (l, u) :
+      cl = jnp.cos(l); cu = jnp.cos(u)
+      branch = jnp.array(cl >= 0, "int32") + 2*jnp.array(cu >= 0, "int32")
+      case3 = lambda : (jnp.sin(l), jnp.sin(u)) # cl >= 0, cu >= 0
+      case0 = lambda : (jnp.sin(u), jnp.sin(l)) # cl <= 0, cu <= 0
+      case1 = lambda : (jnp.minimum(jnp.sin(l), jnp.sin(u)),  1.0) # cl >= 0, cu <= 0
+      case2 = lambda : (-1.0, jnp.maximum(jnp.sin(l), jnp.sin(u))) # cl <= 0, cu >= 0
+      return lax.switch(branch, [case0, case1, case2, case3])
+    def case_pi2pi (l, u) :
+      cl = jnp.cos(l); cu = jnp.cos(u)
+      branch = jnp.array(cl >= 0, "int32") + 2*jnp.array(cu >= 0, "int32")
+      case3 = lambda : (-1.0, 1.0) # cl >= 0, cu >= 0
+      case0 = lambda : (-1.0, 1.0) # cl <= 0, cu <= 0
+      case1 = lambda : (jnp.minimum(jnp.sin(l), jnp.sin(u)),  1.0) # cl >= 0, cu <= 0
+      case2 = lambda : (-1.0, jnp.maximum(jnp.sin(l), jnp.sin(u))) # cl <= 0, cu >= 0
+      return lax.switch(branch, [case0, case1, case2, case3])
+    def case_else (l, u) :
+      return -1.0, 1.0
+    diff = u - l
+    c = jnp.array(diff <= jnp.pi, "int32") + jnp.array(diff <= 2*jnp.pi, "int32")
+    ol, ou = lax.switch(c, [case_else, case_pi2pi, case_lpi], l, u)
+    return ol, ou
+  _sin_if_vmap = jax.vmap(_sin_if,(0,0))
+  _x, x_ = _sin_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
+  return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
+
+def _ibp_cos(x: bound_propagation.LayerInput) -> IntervalBound :
+  return _ibp_sin(IntervalBound(x.lower + jnp.pi/2, x.upper + jnp.pi/2))
 
 _input_transform = lambda x: IntervalBound(x.lower, x.upper)
 
@@ -558,6 +601,9 @@ _primitives_to_pass_through = [
     synthetic_primitives.sigmoid_p,
     lax.sqrt_p,
     lax.sign_p,
+    # Additions for nonlinear systems analysis
+    lax.sin_p,
+    lax.cos_p,
 ]
 _primitive_transform: Mapping[
     Primitive,
@@ -581,6 +627,10 @@ _primitive_transform: Mapping[
     synthetic_primitives.parametric_leaky_relu_p: _ibp_leaky_relu,
     synthetic_primitives.softmax_p: _ibp_softmax,
     synthetic_primitives.posreciprocal_p: _ibp_reciprocal,
+    # lax.reciprocal_p: _ibp_reciprocal,
+    # Additions for nonlinear systems analysis
+    lax.sin_p: _ibp_sin,
+    lax.cos_p: _ibp_cos,
 }
 bound_transform = graph_traversal.OpwiseGraphTransform(
     _input_transform, _primitive_transform)
