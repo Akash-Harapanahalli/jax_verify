@@ -478,24 +478,28 @@ def _ibp_integer_pow(x: bound_propagation.LayerInput, y: int) -> IntervalBound:
   Returns:
     out_bounds: integer_pow output or its bounds.
   """
-  if y < 0:
-    # raise NotImplementedError
-    _ibp_integer_pow(_ibp_reciprocal(x), -y)
-  l_pow = lax.integer_pow(x.lower, y)
-  u_pow = lax.integer_pow(x.upper, y)
+  def _ibp_integer_pow_impl (x: bound_propagation.LayerInput, y:int) -> IntervalBound :
+    l_pow = lax.integer_pow(x.lower, y)
+    u_pow = lax.integer_pow(x.upper, y)
+    
+    def even () :
+      contains_zero = jnp.logical_and(
+          jnp.less_equal(x.lower, 0), jnp.greater_equal(x.upper, 0))
+      lower = jnp.where(contains_zero, jnp.zeros_like(x.lower),
+                        jnp.minimum(l_pow, u_pow))
+      upper = jnp.maximum(l_pow, u_pow)
+      return (lower, upper)
+    odd = lambda : (l_pow, u_pow)
 
-  if y % 2 == 0:
-    # Even powers
-    contains_zero = jnp.logical_and(
-        jnp.less_equal(x.lower, 0), jnp.greater_equal(x.upper, 0))
-    lower = jnp.where(contains_zero, jnp.zeros_like(x.lower),
-                      jnp.minimum(l_pow, u_pow))
-    upper = jnp.maximum(l_pow, u_pow)
-    return IntervalBound(lower, upper)
-  else:
-    # Odd powers
-    return IntervalBound(l_pow, u_pow)
+    return lax.cond(jnp.all(y % 2), odd, even)
 
+  def _pos_pow () :
+    return _ibp_integer_pow_impl(x, y)
+  def _neg_pow () :
+    return _ibp_integer_pow_impl(_ibp_reciprocal(x), -y)
+
+  ol, ou = lax.cond(jnp.all(y < 0), _neg_pow, _pos_pow)
+  return IntervalBound(ol, ou)
 
 def _ibp_linear(*args, **kwargs) -> IntervalBound:
   """Propagation of IBP bounds through a linear primitive treated as a blackbox.
@@ -584,6 +588,50 @@ def _ibp_sin(x: bound_propagation.LayerInput) -> IntervalBound :
 def _ibp_cos(x: bound_propagation.LayerInput) -> IntervalBound :
   return _ibp_sin(IntervalBound(x.lower + jnp.pi/2, x.upper + jnp.pi/2))
 
+def _ibp_tan(x: bound_propagation.LayerInput) -> IntervalBound :
+  l = x.lower; u = x.upper
+  div = jnp.floor((u + jnp.pi/2) / (jnp.pi)).astype(int)
+  l -= div*jnp.pi; u -= div*jnp.pi
+  ol = jnp.where((l < -jnp.pi/2), -jnp.inf, jnp.tan(l))
+  ou = jnp.where((l < -jnp.pi/2),  jnp.inf, jnp.tan(u))
+  return IntervalBound(ol, ou)
+
+def _ibp_atan(x: bound_propagation.LayerInput) -> IntervalBound :
+  return IntervalBound(jnp.arctan(x.lower), jnp.arctan(x.upper))
+
+
+def _ibp_pow(x: bound_propagation.LayerInput, y: int) -> IntervalBound:
+  """Propagation of IBP bounds through pow. Only supports positive x.
+
+  Args:
+    x: Argument be raised to a power, element-wise
+    y: fixed integer exponent
+
+  Returns:
+    out_bounds: integer_pow output or its bounds.
+  """
+  def _ibp_pow_impl (x: bound_propagation.LayerInput, y:int) :
+    l_pow = lax.pow(x.lower, y)
+    u_pow = lax.pow(x.upper, y)
+    cond = jnp.logical_and(x.lower >= 0, x.upper >= 0)
+    ol = jnp.where(cond, l_pow, -jnp.inf)
+    ou = jnp.where(cond, u_pow, jnp.inf)
+    return (ol, ou)
+
+  def _pos_pow () :
+    return _ibp_pow_impl(x, y)
+  def _neg_pow () :
+    return _ibp_pow_impl(_ibp_reciprocal(x), -y)
+
+  ol, ou = lax.cond(jnp.all(y < 0), _neg_pow, _pos_pow)
+  return IntervalBound(ol, ou)
+
+
+def _ibp_sqrt(x: bound_propagation.LayerInput) -> IntervalBound :
+  ol = jnp.where((x.lower < 0), -jnp.inf, jnp.sqrt(x.lower))
+  ou = jnp.where((x.lower < 0), jnp.inf, jnp.sqrt(x.upper))
+  return IntervalBound(ol, ou)
+
 _input_transform = lambda x: IntervalBound(x.lower, x.upper)
 
 # Define the mapping from jaxpr primitive to the IBP version.
@@ -604,6 +652,10 @@ _primitives_to_pass_through = [
     # Additions for nonlinear systems analysis
     lax.sin_p,
     lax.cos_p,
+    lax.tan_p,
+    lax.atan_p,
+    lax.sqrt_p,
+    lax.pow_p,
 ]
 _primitive_transform: Mapping[
     Primitive,
@@ -631,6 +683,10 @@ _primitive_transform: Mapping[
     # Additions for nonlinear systems analysis
     lax.sin_p: _ibp_sin,
     lax.cos_p: _ibp_cos,
+    lax.tan_p: _ibp_tan,
+    lax.atan_p: _ibp_atan,
+    lax.sqrt_p: _ibp_sqrt,
+    lax.pow_p: _ibp_pow,
 }
 bound_transform = graph_traversal.OpwiseGraphTransform(
     _input_transform, _primitive_transform)
