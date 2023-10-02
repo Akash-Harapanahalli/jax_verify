@@ -94,8 +94,8 @@ class IntervalBound(Bound, graph_traversal.InputBound):
   def __init__(self, lower_bound: Tensor, upper_bound: Tensor):  # pylint: disable=super-init-not-called
     # Pylint complains that the __init__ method of the base class Bound is not
     # called, despite the fact that Bound does not have an __init__ method.
-    self._lower_bound = lower_bound
-    self._upper_bound = upper_bound
+    self._lower_bound = jnp.asarray(lower_bound)
+    self._upper_bound = jnp.asarray(upper_bound)
 
   @property
   def lower(self) -> Tensor:
@@ -118,12 +118,15 @@ class IntervalBound(Bound, graph_traversal.InputBound):
 
   def project_onto_bound(self, tensor: Tensor) -> Tensor:
     return jnp.clip(tensor, a_min=self._lower_bound, a_max=self._upper_bound)
-
+  
   def __str__(self) -> str:
     return f"([{self.lower}, {self.upper}])"
   
   def __repr__(self) -> str:
     return f"([{self.lower}, {self.upper}])"
+  
+  def __getitem__(self, i:int) :
+    return IntervalBound(self.lower[i], self.upper[i])
 
 def unwrapping(fn):
   """Create a wrapper function to unwrap the bound arguments.

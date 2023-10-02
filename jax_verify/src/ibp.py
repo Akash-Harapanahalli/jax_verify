@@ -550,9 +550,13 @@ def _ibp_reciprocal(x: bound_propagation.LayerInput) -> IntervalBound:
     c = jnp.logical_or(jnp.logical_and(l > 0, u > 0),
                        jnp.logical_and(l < 0, u < 0))
     return lax.cond(c, case0, case1)
-  _reciprocal_if_vmap = jax.vmap(_reciprocal_if,(0,0))
-  _x, x_ = _reciprocal_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
-  return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
+  if x.lower.ndim == 0 :
+    _x, x_ = _reciprocal_if(x.lower, x.upper)
+    return IntervalBound(_x, x_)
+  else :
+    _reciprocal_if_vmap = jax.vmap(_reciprocal_if,(0,0))
+    _x, x_ = _reciprocal_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
+    return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
 
 """
 Additions for nonlinear systems analysis
@@ -581,9 +585,13 @@ def _ibp_sin(x: bound_propagation.LayerInput) -> IntervalBound :
     c = jnp.array(diff <= jnp.pi, "int32") + jnp.array(diff <= 2*jnp.pi, "int32")
     ol, ou = lax.switch(c, [case_else, case_pi2pi, case_lpi], l, u)
     return ol, ou
-  _sin_if_vmap = jax.vmap(_sin_if,(0,0))
-  _x, x_ = _sin_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
-  return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
+  if x.lower.ndim == 0 :
+    _x, x_ = _sin_if(x.lower, x.upper)
+    return IntervalBound(_x, x_)
+  else :
+    _sin_if_vmap = jax.vmap(_sin_if,(0,0))
+    _x, x_ = _sin_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
+    return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
 
 def _ibp_cos(x: bound_propagation.LayerInput) -> IntervalBound :
   return _ibp_sin(IntervalBound(x.lower + jnp.pi/2, x.upper + jnp.pi/2))
