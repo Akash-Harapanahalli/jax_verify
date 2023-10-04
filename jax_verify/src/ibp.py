@@ -561,6 +561,20 @@ def _ibp_reciprocal(x: bound_propagation.LayerInput) -> IntervalBound:
 """
 Additions for nonlinear systems analysis
 """
+
+def _ibp_mul(x: bound_propagation.LayerInput, y: bound_propagation.LayerInput) -> IntervalBound :
+  # def _mul_if (xl:jnp.float32, xu:jnp.float32, yl:jnp.float32, yu:jnp.float32) :
+    
+  # _mul_if_vmap = jax.vmap(_mul_if,(0,0,0,0))
+  # _ret, ret_ = _mul_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1), y.lower.reshape(-1), y.upper.reshape(-1))
+  # return IntervalBound(_ret.reshape(x.shape), ret_.reshape(x.shape))
+  _1 = x.lower*y.lower
+  _2 = x.lower*y.upper
+  _3 = x.upper*y.lower
+  _4 = x.upper*y.upper
+  return IntervalBound(jnp.minimum(jnp.minimum(_1,_2),jnp.minimum(_3,_4)),
+                       jnp.maximum(jnp.maximum(_1,_2),jnp.maximum(_3,_4)))
+
 def _ibp_sin(x: bound_propagation.LayerInput) -> IntervalBound :
   def _sin_if (l:jnp.float32, u:jnp.float32) :
     def case_lpi (l, u) :
@@ -585,13 +599,9 @@ def _ibp_sin(x: bound_propagation.LayerInput) -> IntervalBound :
     c = jnp.array(diff <= jnp.pi, "int32") + jnp.array(diff <= 2*jnp.pi, "int32")
     ol, ou = lax.switch(c, [case_else, case_pi2pi, case_lpi], l, u)
     return ol, ou
-  if x.lower.ndim == 0 :
-    _x, x_ = _sin_if(x.lower, x.upper)
-    return IntervalBound(_x, x_)
-  else :
-    _sin_if_vmap = jax.vmap(_sin_if,(0,0))
-    _x, x_ = _sin_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
-    return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
+  _sin_if_vmap = jax.vmap(_sin_if,(0,0))
+  _x, x_ = _sin_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1))
+  return IntervalBound(_x.reshape(x.shape), x_.reshape(x.shape))
 
 def _ibp_cos(x: bound_propagation.LayerInput) -> IntervalBound :
   return _ibp_sin(IntervalBound(x.lower + jnp.pi/2, x.upper + jnp.pi/2))
@@ -658,12 +668,14 @@ _primitives_to_pass_through = [
     lax.sqrt_p,
     lax.sign_p,
     # Additions for nonlinear systems analysis
+    lax.mul_p,
     lax.sin_p,
     lax.cos_p,
     lax.tan_p,
     lax.atan_p,
     lax.sqrt_p,
     lax.pow_p,
+    lax.dot_general_p,
 ]
 _primitive_transform: Mapping[
     Primitive,
@@ -689,6 +701,7 @@ _primitive_transform: Mapping[
     synthetic_primitives.posreciprocal_p: _ibp_reciprocal,
     # lax.reciprocal_p: _ibp_reciprocal,
     # Additions for nonlinear systems analysis
+    lax.mul_p: _ibp_mul,
     lax.sin_p: _ibp_sin,
     lax.cos_p: _ibp_cos,
     lax.tan_p: _ibp_tan,
