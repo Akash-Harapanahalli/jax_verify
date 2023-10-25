@@ -20,6 +20,8 @@ from typing import Callable, Mapping, Tuple, Union
 
 import jax
 from jax import lax
+from jax._src.lax.lax import _convert_element_type
+from jax._src import ad_util
 import jax.numpy as jnp
 from jax_verify.src import bound_propagation
 from jax_verify.src import graph_traversal
@@ -562,18 +564,36 @@ def _ibp_reciprocal(x: bound_propagation.LayerInput) -> IntervalBound:
 Additions for nonlinear systems analysis
 """
 
+def _ibp_add_any (x, y) -> IntervalBound :
+  if isinstance(x, IntervalBound) and isinstance(y, IntervalBound) :
+    return IntervalBound(x.lower + y.lower, x.upper + y.upper)
+  elif isinstance (x, IntervalBound) :
+    return IntervalBound(x.lower + y, x.upper + y)
+  else :
+    return IntervalBound(x + y.lower, x + y.upper)
+
 def _ibp_mul(x: bound_propagation.LayerInput, y: bound_propagation.LayerInput) -> IntervalBound :
   # def _mul_if (xl:jnp.float32, xu:jnp.float32, yl:jnp.float32, yu:jnp.float32) :
     
   # _mul_if_vmap = jax.vmap(_mul_if,(0,0,0,0))
   # _ret, ret_ = _mul_if_vmap(x.lower.reshape(-1), x.upper.reshape(-1), y.lower.reshape(-1), y.upper.reshape(-1))
   # return IntervalBound(_ret.reshape(x.shape), ret_.reshape(x.shape))
-  _1 = x.lower*y.lower
-  _2 = x.lower*y.upper
-  _3 = x.upper*y.lower
-  _4 = x.upper*y.upper
-  return IntervalBound(jnp.minimum(jnp.minimum(_1,_2),jnp.minimum(_3,_4)),
-                       jnp.maximum(jnp.maximum(_1,_2),jnp.maximum(_3,_4)))
+  if isinstance(x, IntervalBound) and isinstance(y, IntervalBound) :
+    _1 = x.lower*y.lower
+    _2 = x.lower*y.upper
+    _3 = x.upper*y.lower
+    _4 = x.upper*y.upper
+    return IntervalBound(jnp.minimum(jnp.minimum(_1,_2),jnp.minimum(_3,_4)),
+                        jnp.maximum(jnp.maximum(_1,_2),jnp.maximum(_3,_4)))
+  elif isinstance(x,IntervalBound) :
+    _1 = x.lower*y
+    _2 = x.upper*y
+    return IntervalBound(jnp.minimum(_1,_2), jnp.maximum(_1,_2))
+  elif isinstance(y,IntervalBound) :
+    _1 = x*y.lower
+    _2 = x*y.upper
+    return IntervalBound(jnp.minimum(_1,_2), jnp.maximum(_1,_2))
+    
 
 def _ibp_sin(x: bound_propagation.LayerInput) -> IntervalBound :
   def _sin_if (l:jnp.float32, u:jnp.float32) :
@@ -650,6 +670,9 @@ def _ibp_sqrt(x: bound_propagation.LayerInput) -> IntervalBound :
   ou = jnp.where((x.lower < 0), jnp.inf, jnp.sqrt(x.upper))
   return IntervalBound(ol, ou)
 
+def _ibp_convert_element_type(operand, new_dtype, weak_type=False) :
+  return IntervalBound(_convert_element_type(operand.lower, new_dtype, weak_type), _convert_element_type(operand.upper, new_dtype, weak_type))
+
 _input_transform = lambda x: IntervalBound(x.lower, x.upper)
 
 # Define the mapping from jaxpr primitive to the IBP version.
@@ -668,6 +691,7 @@ _primitives_to_pass_through = [
     lax.sqrt_p,
     lax.sign_p,
     # Additions for nonlinear systems analysis
+    ad_util.add_any_p,
     lax.mul_p,
     lax.sin_p,
     lax.cos_p,
@@ -676,6 +700,7 @@ _primitives_to_pass_through = [
     lax.sqrt_p,
     lax.pow_p,
     lax.dot_general_p,
+    lax.convert_element_type_p,
 ]
 _primitive_transform: Mapping[
     Primitive,
@@ -701,6 +726,7 @@ _primitive_transform: Mapping[
     synthetic_primitives.posreciprocal_p: _ibp_reciprocal,
     # lax.reciprocal_p: _ibp_reciprocal,
     # Additions for nonlinear systems analysis
+    ad_util.add_any_p: _ibp_add_any,
     lax.mul_p: _ibp_mul,
     lax.sin_p: _ibp_sin,
     lax.cos_p: _ibp_cos,
@@ -708,6 +734,7 @@ _primitive_transform: Mapping[
     lax.atan_p: _ibp_atan,
     lax.sqrt_p: _ibp_sqrt,
     lax.pow_p: _ibp_pow,
+    lax.convert_element_type_p: _ibp_convert_element_type,
 }
 bound_transform = graph_traversal.OpwiseGraphTransform(
     _input_transform, _primitive_transform)
