@@ -128,6 +128,9 @@ class IntervalBound(Bound, graph_traversal.InputBound):
   def __getitem__(self, i:int) :
     return IntervalBound(self.lower[i], self.upper[i])
 
+  def __len__(self) :
+    return len(self.lower)
+
 def unwrapping(fn):
   """Create a wrapper function to unwrap the bound arguments.
 
